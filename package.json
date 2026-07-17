@@ -50,6 +50,7 @@
   },
   "dependencies": {
     "@minecraft/server": "^2.0.0",
+    "eventemitter3": "^5.0.4",
     "socket-be": "^2.6.0"
   }
 }
