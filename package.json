@@ -1,0 +1,55 @@
+{
+  "name": "mcbe-packet-bridge",
+  "version": "0.1.0",
+  "description": "Uses the limited MCBE WebSocket API for unlimited packet transport.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "build:mc": "tsc -p minecraft",
+    "dev": "tsc -w",
+    "dev:mc": "tsc -w -p minecraft",
+    "prepare": "tsc && tsc -p minecraft"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kevin20180/mcbe-packet-bridge.git"
+  },
+  "keywords": [
+    "mc",
+    "mcbe",
+    "mcpe",
+    "minecraft",
+    "bedrock",
+    "packet",
+    "brige",
+    "transport",
+    "unlimited",
+    "ws",
+    "websocket",
+    "server"
+  ],
+  "author": "Kevin",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Kevin20180/mcbe-packet-bridge/issues"
+  },
+  "homepage": "https://github.com/Kevin20180/mcbe-packet-bridge#readme",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mc": {
+      "types": "./minecraft/dist/index.d.ts",
+      "default": "./minecraft/dist/index.js"
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@minecraft/server": "^2.0.0",
+    "socket-be": "^2.6.0"
+  }
+}
