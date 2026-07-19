@@ -2,38 +2,55 @@ import * as mc from '@minecraft/server';
 import { EventEmitter } from 'eventemitter3';
 
 export class PacketBridge extends EventEmitter<PacketBridgeEvents> {
-	readonly unfinishedPacketsById: Map<string, Packet>;
+	packetIdIndex: number;
+	receivingPacketsById: Map<string, Packet>;
+	sendingPacketsById: Map<string, Packet>;
+	sendingPacketRawChunks: string[];
 	
 	constructor() {
 		super();
-		this.unfinishedPacketsById = new Map();
+		this.packetIdIndex = 0;
+		this.receivingPacketsById = new Map();
+		this.sendingPacketsById = new Map();
+		this.sendingPacketRawChunks = [];
 	}
 
-	getUnfinishedPacket(id: string): Packet | undefined {
-		return this.unfinishedPacketsById.get(id);
+	makePacketId(): string {
+		let id = this.packetIdIndex.toString();
+
+		this.packetIdIndex++;
+		if(this.packetIdIndex > 999) this.packetIdIndex = 0;
+
+		while(id.length < 3) {
+			id = '0' + id;
+		}
+
+		return id;
 	}
 
-	getOrCreateUnfinishedPacket(id: string): Packet {
-		let packet = this.getUnfinishedPacket(id);
+	createPacket(data: string): Packet {
+		let packet = new Packet(this, this.makePacketId());
+		packet.data = data;
+		return packet;
+	}
+
+	getPacketBeingReceived(id: string): Packet | undefined {
+		return this.receivingPacketsById.get(id);
+	}
+
+	getOrCreatePacketBeingReceived(id: string): Packet {
+		let packet = this.getPacketBeingReceived(id);
 
 		if(!packet) {
-			packet = new Packet(id);
-			this.unfinishedPacketsById.set(id, packet);
+			packet = new Packet(this, id);
+			packet.isReceiving = true;
+			this.receivingPacketsById.set(id, packet);
 		}
 
 		return packet;
 	}
 
-	finishPacket(id: string) {
-		let packet = this.getUnfinishedPacket(id);
-		if(packet) {
-			packet.isFinished = true;
-			packet.emit('finish', packet);
-		}
-		this.unfinishedPacketsById.delete(id);
-	}
-
-	chunk(rawData: string): Packet {
+	receiveChunkPacket(rawData: string): Packet {
 		let id = rawData.slice(0, 3);
 		rawData = rawData.slice(3);
 
@@ -44,53 +61,127 @@ export class PacketBridge extends EventEmitter<PacketBridgeEvents> {
 
 		if(id.length < 3 || status.length < 1 || !['d', 'e'].includes(status)) throw Error('Invalid chunk.');
 
-		let packet = this.getOrCreateUnfinishedPacket(id);
+		let packet = this.getOrCreatePacketBeingReceived(id);
 
 		switch(status) {
 			case 'd':
 				packet.data += chunkData;
 				break;
 			case 'e':
-				this.finishPacket(id);
+				packet.finishReceive();
 				break;
 		}
 
 		return packet;
 	}
+
+	getPacketBeingSend(id: string): Packet | undefined {
+		return this.sendingPacketsById.get(id);
+	}
+
+	getOrCreatePacketBeingSend(id: string): Packet {
+		let packet = this.getPacketBeingSend(id);
+
+		if(!packet) {
+			packet = new Packet(this, id);
+			packet.isSending = true;
+			this.sendingPacketsById.set(id, packet);
+		}
+
+		return packet;
+	}
+
+	send(message: string) {
+		let packet = this.getOrCreatePacketBeingSend(this.makePacketId());
+		packet.data = message;
+
+		for(let chunk of packet.getRawChunks()) {
+			this.sendingPacketRawChunks.push(chunk);
+		}
+		this.sendingPacketRawChunks.push(`${packet.id}e`);
+	}
 }
 
 export class Packet extends EventEmitter<PacketEvents> {
+	readonly bridge: PacketBridge;
 	readonly id: string;
 	data: string;
-	isFinished: boolean;
+	isSending: boolean;
+	isReceiving: boolean;
 
-	constructor(id: string) {
+	constructor(bridge: PacketBridge, id: string) {
 		super();
+		this.bridge = bridge;
 		this.id = id;
 		this.data = '';
-		this.isFinished = false;
+		this.isSending = false;
+		this.isReceiving = false;
 	}
 
-	onFinish(callback: (packet: Packet) => void) {
-		if(this.isFinished) {
-			callback(this);
-		} else {
-			this.once('finish', callback);
+	getRawChunks(): string[] {
+		let chunks: string[] = [];
+		let data = this.data;
+
+		while(data.length > 350) {
+			chunks.push(`${this.id}d${data.slice(0, 350)}`);
+			data = data.slice(350);
 		}
+		chunks.push(`${this.id}d${data.slice(0, 350)}`);
+
+		return chunks;
+	}
+
+	finishSend() {
+		if(!this.isSending) return;
+		this.isSending = false;
+		this.bridge.sendingPacketsById.delete(this.id);
+		this.emit('finishSend', this);
+	}
+
+	finishReceive() {
+		if(!this.isReceiving) return;
+		this.isReceiving = false;
+		this.bridge.receivingPacketsById.delete(this.id);
+		this.emit('finishReceive', this);
+		this.bridge.emit('message', this.data, this);
 	}
 }
 
 export type PacketBridgeEvents = {
-	message: (message: string) => void
+	message: (message: string, packet: Packet) => void
 }
 
 export type PacketEvents = {
-	finish: (packet: Packet) => void
+	finishSend: (packet: Packet) => void,
+	finishReceive: (packet: Packet) => void
 }
 
 export const packetBridge = new PacketBridge();
 
+mc.system.beforeEvents.startup.subscribe((event) => {
+	const { customCommandRegistry } = event;
+
+	customCommandRegistry.registerCommand({
+		name: 'packet:get_packet',
+		description: 'get_packet',
+		cheatsRequired: true,
+		permissionLevel: mc.CommandPermissionLevel.GameDirectors
+	}, () => {
+		let res = {
+			status: mc.CustomCommandStatus.Success,
+			message: packetBridge.sendingPacketRawChunks[0] || ''
+		}
+		packetBridge.sendingPacketRawChunks = packetBridge.sendingPacketRawChunks.slice(1);
+
+		return res;
+	})
+})
+
 mc.system.afterEvents.scriptEventReceive.subscribe((event) => {
 	if(event.id !== 'packet:chunk') return;
-	packetBridge.chunk(event.message);
+	packetBridge.receiveChunkPacket(event.message);
+})
+
+packetBridge.on('message', (message) => {
+	mc.world.sendMessage(`Mensagem tamanho ${message.length}: ${message}`);
 })
